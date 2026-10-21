@@ -1,0 +1,64 @@
+plugins { id 'java-library' }
+java { sourceCompatibility = JavaVersion.VERSION_1_8; targetCompatibility = JavaVersion.VERSION_1_8 }
+dependencies {
+    api files('libs/commons-net-3.13.0.jar')
+    implementation files('libs/commons-io-2.21.0.jar')
+    /* SMB：SMBJ 纯 Java SMB2/3 客户端；BouncyCastle 提供 NTLM/加密，SLF4J 为日志门面。
+       全部走本地 jar（与 commons-* 一致的离线策略），避免 Maven 拉取。
+       slf4j-api 只做门面，Android 端用 client-app 里的 no-op 绑定，不引入日志后端。 */
+    api files('libs/smbj-0.13.0.jar')
+    implementation files('libs/dcerpc-0.11.0-android.jar')
+    implementation 'com.google.guava:guava:33.0.0-android'
+    implementation 'org.apache.commons:commons-lang3:3.14.0'
+    implementation files('libs/bcprov-jdk18on-1.86.jar')
+    implementation files('libs/bcpkix-jdk18on-1.86.jar')
+    implementation files('libs/bcutil-jdk18on-1.86.jar')
+    // Public BCSSLSocket API supports explicit FTPS control/data session resumption.
+    implementation files('libs/bctls-jdk18on-1.86.jar')
+    /* SMBJ 的传递依赖：mbassador 事件总线（SMBEventBus 必需）、asn-one（SPNEGO/Kerberos ASN.1）。
+       此前漏引入 mbassador 导致 SMBClient 构造时 NoClassDefFoundError。 */
+    implementation files('libs/mbassador-1.3.0.jar')
+    implementation files('libs/asn-one-0.6.0.jar')
+    /* SMB 网络库本身需要 SLF4J；与 app 的 junrar 统一为同一版本，不依赖宿主补齐。 */
+    implementation 'org.slf4j:slf4j-api:2.0.17'
+    implementation files('libs/slf4j-nop-2.0.17.jar')
+    testImplementation 'junit:junit:4.12'
+    testImplementation 'org.mockito:mockito-core:4.11.0'
+}
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }
+test { testLogging { events 'failed', 'skipped' } }
+
+def testKeyStore = layout.buildDirectory.file('test-tls/localhost.p12')
+tasks.register('generateTestCertificate', Exec) {
+    def target = testKeyStore.get().asFile
+    outputs.file(target)
+    onlyIf { !target.exists() }
+    doFirst { target.parentFile.mkdirs() }
+    commandLine "${System.getProperty('java.home')}/bin/keytool", '-genkeypair', '-alias', 'localhost', '-keyalg', 'RSA', '-keysize', '2048', '-dname', 'CN=localhost,OU=PUBLIC TEST ONLY', '-ext', 'SAN=dns:localhost,ip:127.0.0.1', '-validity', '3650', '-storetype', 'PKCS12', '-keystore', target.absolutePath, '-storepass', 'test-only', '-keypass', 'test-only', '-noprompt'
+}
+test {
+    dependsOn 'generateTestCertificate'
+    systemProperty 'test.keystore', testKeyStore.get().asFile.absolutePath
+}
+
+
+tasks.register('smokeServer', JavaExec) {
+    dependsOn testClasses, 'generateTestCertificate'
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.cj.music.net.SmokeServer'
+    systemProperty 'test.keystore', testKeyStore.get().asFile.absolutePath
+    args rootProject.file('outputs/smoke-server.properties').absolutePath
+}
+
+def dnsKeyStore = layout.buildDirectory.file('test-tls/localhost-dns.p12')
+tasks.register('generateDnsTestCertificate', Exec) {
+    def target = dnsKeyStore.get().asFile
+    outputs.file(target)
+    onlyIf { !target.exists() }
+    doFirst { target.parentFile.mkdirs() }
+    commandLine "${System.getProperty('java.home')}/bin/keytool", '-genkeypair', '-alias', 'localhost', '-keyalg', 'RSA', '-keysize', '2048', '-dname', 'CN=localhost,OU=PUBLIC TEST ONLY', '-ext', 'SAN=dns:localhost', '-validity', '3650', '-storetype', 'PKCS12', '-keystore', target.absolutePath, '-storepass', 'test-only', '-keypass', 'test-only', '-noprompt'
+}
+test {
+    dependsOn 'generateDnsTestCertificate'
+    systemProperty 'test.dns.keystore', dnsKeyStore.get().asFile.absolutePath
+}

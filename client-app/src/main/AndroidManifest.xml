@@ -1,0 +1,96 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <uses-permission android:name="android.permission.INTERNET"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC"/>
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <uses-permission android:name="android.permission.WAKE_LOCK"/>
+    <uses-permission android:name="android.permission.WRITE_SETTINGS"/>
+    <uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE" />
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
+    <!-- Android 10（API 29）的「分区存储」是按 targetSdk 强制的：本项目 targetSdk 36（>= 29），
+         不声明下面这个 flag 就会走分区存储 —— 此时即使拿到了 READ/WRITE_EXTERNAL_STORAGE，
+         File API 也只能看到媒体文件和自己创建的目录，/storage/emulated/0 的 listFiles() 拿不到完整内容。
+         这就是「Android 10 给了权限却读不到目录」的原因。
+         官方 storage 文档明确：App 在 Android 10 设备上运行时该 flag 依然生效，与本应用的 targetSdk 无关；
+         而 Android 11+ 设备上，targetSdk >= 30 的应用会被系统忽略它（那时靠 MANAGE_EXTERNAL_STORAGE）。
+         所以这一行只对 Android 10 起作用，不改变 Android 11+ 的现有行为。 -->
+    <!-- WebDAV/OpenList 常见部署在局域网 http（NAS、AList/OpenList 默认 http 端口）。
+         没有这一条，Android 明文流量策略会直接拒连。公网建议自行上 https（证书核对/指纹 pin 与 FTPS 同套）。 -->
+    <application android:name=".ClientApplication" android:label="@string/client_app_name" android:icon="@mipmap/client_launcher" android:roundIcon="@mipmap/client_launcher" android:theme="@style/Client_Theme.FtpClient" android:allowBackup="false" android:dataExtractionRules="@xml/client_data_extraction_rules" android:supportsRtl="true" android:requestLegacyExternalStorage="true" android:usesCleartextTraffic="true">
+        <!-- 关掉「方向覆盖」：Android 12L+ 在大屏设备（sw≥600dp）上会忽略 Activity 的固定方向请求。
+             按官方 device-compatibility-mode 文档把 override 关掉。放在 application 上兜底：
+             当前没有任何 Activity 声明固定方向（音乐模式已删除），留着是为了将来加
+             screenOrientation 时不用再想起这一条。 -->
+        <property android:name="android.window.PROPERTY_COMPAT_ALLOW_ORIENTATION_OVERRIDE" android:value="false"/>
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter><action android:name="android.intent.action.MAIN"/><category android:name="android.intent.category.LAUNCHER"/></intent-filter>
+        </activity>
+        <activity android:name=".ImagePreviewActivity" android:exported="false" android:theme="@style/Client_Theme.FtpClient" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"/>
+        <!-- 格式工厂：转码过程中旋转屏幕不能重建，否则 FFmpegKit 的会话回调会指向已销毁的界面。 -->
+        <activity android:name=".FormatFactoryActivity" android:exported="false" android:theme="@style/Client_Theme.FtpClient" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"/>
+        <!-- 转码历史：与格式工厂同一套。uiMode 必须跟上——AppCompatDelegate 锁死了 NightMode，
+             但车载/桌面模式切换仍会走到这里，缺 uiMode 会整页重建、滚动位置与选中态全丢。 -->
+        <activity android:name=".FormatHistoryActivity" android:exported="false" android:theme="@style/Client_Theme.FtpClient" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|uiMode"/>
+        <service android:name=".MusicPlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
+        <service android:name=".LinkDownloadService" android:exported="false" android:foregroundServiceType="dataSync"/>
+        <activity android:name=".DownloadOpenActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="magnet"/>
+                <data android:scheme="ed2k"/>
+            </intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="text/plain"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.VIEW"/><category android:name="android.intent.category.DEFAULT"/><category android:name="android.intent.category.BROWSABLE"/><data android:scheme="content"/><data android:scheme="file"/><data android:mimeType="application/x-bittorrent"/><data android:mimeType="application/x-magnet"/><data android:mimeType="application/x-ed2k"/></intent-filter>
+            <intent-filter><action android:name="android.intent.action.SEND"/><category android:name="android.intent.category.DEFAULT"/><data android:mimeType="application/x-bittorrent"/></intent-filter>
+        </activity>
+        <activity android:name=".ApkInstallActivity" android:exported="true" android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" android:theme="@style/Client_Theme.FtpClient.Floating">
+            <!-- 别的应用「打开」扩展名 .1 的文件时出现，选择器里显示为「安装此apk」。
+                 只用 pathPattern、不能声明 host：一旦有了 authority，file://（authority 为空）就匹配不上。
+                 glob 语法里 * 只重复前一个字符，所以点号数量不同的情况各写一条。 -->
+            <intent-filter android:label="@string/client_install_apk">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+                <data android:pathPattern=".*\\.1"/>
+                <data android:pathPattern=".*\\..*\\.1"/>
+                <data android:pathPattern=".*\\..*\\..*\\.1"/>
+            </intent-filter>
+        </activity>
+        <activity android:name=".ArchiveOpenActivity" android:exported="true" android:excludeFromRecents="true" android:configChanges="orientation|screenSize|screenLayout|keyboardHidden" android:theme="@style/Client_Theme.FtpClient.Floating">
+            <!-- 别的应用「打开」压缩包时出现，选择器里显示为「打开压缩包」。
+                 与 .1 安装文件同理：只用 pathPattern、不声明 host，才能同时匹配 file:// 与 content://。 -->
+            <intent-filter android:label="@string/client_open_archive">
+                <action android:name="android.intent.action.VIEW"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <category android:name="android.intent.category.BROWSABLE"/>
+                <data android:scheme="file"/>
+                <data android:scheme="content"/>
+                <data android:pathPattern=".*\\.zip"/> <data android:pathPattern=".*\\..*\\.zip"/> <data android:pathPattern=".*\\..*\\..*\\.zip"/>
+                <data android:pathPattern=".*\\.rar"/> <data android:pathPattern=".*\\..*\\.rar"/> <data android:pathPattern=".*\\..*\\..*\\.rar"/>
+                <data android:pathPattern=".*\\.7z"/> <data android:pathPattern=".*\\..*\\.7z"/> <data android:pathPattern=".*\\..*\\..*\\.7z"/>
+                <data android:pathPattern=".*\\.tar"/> <data android:pathPattern=".*\\..*\\.tar"/> <data android:pathPattern=".*\\..*\\..*\\.tar"/>
+                <data android:pathPattern=".*\\.gz"/> <data android:pathPattern=".*\\..*\\.gz"/> <data android:pathPattern=".*\\..*\\..*\\.gz"/>
+                <data android:pathPattern=".*\\.tgz"/> <data android:pathPattern=".*\\..*\\.tgz"/> <data android:pathPattern=".*\\..*\\..*\\.tgz"/>
+                <data android:pathPattern=".*\\.bz2"/> <data android:pathPattern=".*\\..*\\.bz2"/> <data android:pathPattern=".*\\..*\\..*\\.bz2"/>
+                <data android:pathPattern=".*\\.tbz"/> <data android:pathPattern=".*\\..*\\.tbz"/> <data android:pathPattern=".*\\..*\\..*\\.tbz"/>
+                <data android:pathPattern=".*\\.tbz2"/> <data android:pathPattern=".*\\..*\\.tbz2"/> <data android:pathPattern=".*\\..*\\..*\\.tbz2"/>
+                <data android:pathPattern=".*\\.xz"/> <data android:pathPattern=".*\\..*\\.xz"/> <data android:pathPattern=".*\\..*\\..*\\.xz"/>
+                <data android:pathPattern=".*\\.txz"/> <data android:pathPattern=".*\\..*\\.txz"/> <data android:pathPattern=".*\\..*\\..*\\.txz"/>
+                <data android:pathPattern=".*\\.lzma"/> <data android:pathPattern=".*\\..*\\.lzma"/> <data android:pathPattern=".*\\..*\\..*\\.lzma"/>
+                <data android:pathPattern=".*\\.jar"/> <data android:pathPattern=".*\\..*\\.jar"/> <data android:pathPattern=".*\\..*\\..*\\.jar"/>
+            </intent-filter>
+        </activity>
+        <!-- 编辑状态（位图 + 撤销栈）只在内存里：旋转屏幕不能重建，否则编辑内容全丢。
+             与 VideoPlayerActivity 保持同一套 configChanges。 -->
+        <activity android:name=".ImageEditorActivity" android:exported="false" android:theme="@style/Client_Theme.FtpClient" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"/>
+        <activity android:name=".VideoPlayerActivity" android:exported="false" android:theme="@style/Client_Theme.FtpClient.Player" android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"/>
+    <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.client.exports" android:exported="false" android:grantUriPermissions="true"><meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/client_export_paths"/></provider>
+    </application>
+</manifest>

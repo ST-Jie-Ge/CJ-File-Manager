@@ -1,0 +1,56 @@
+# --- 构建产物 / IDE / 本地缓存 ---
+.gradle/
+**/build/
+**/.cxx/
+.idea/
+.kotlin/
+.android-user/
+.gradle-user/
+local.properties
+*.log
+
+# --- 密钥 ---
+*.jks
+*.keystore
+*.p12
+
+# --- 本地杂项（非功能代码）---
+outputs/
+tmp/
+screen.png
+q.xml
+q2.xml
+.workbuddy/
+
+# --- 第三方嵌套仓库：third_party/media3 是上游 google/ExoPlayer 1.4.1 的独立 git 仓库，
+#     git 主仓库无法直接跟踪其内容。我们对 decoder_av1 的本地修改以补丁形式放在
+#     patches/media3/（含恢复说明），上游第三方源码（libgav1 / cpu_features）按上游原样。
+third_party/media3/
+
+# --- FFmpeg Kit：只备份构建脚本，aar（base 下游产物 / out 构建产物）不推 ---
+ffmpeg-kit-build/base/
+ffmpeg-kit-build/out/
+
+# --- 捐赠二维码（私有内容，不入库）---
+client-app/src/main/assets/sponsor_qr.bin
+
+# --- 外观 / 样式设计资源（不入库，仅本地保留）---
+# 自定义图标、背景、布局、主题/颜色、动画、字体、启动图标等均为视觉设计，
+# 按「仅功能代码」要求不推送；捐赠图标（client_sidebar_icon_sponsor 等）也在此范围内。
+**/src/main/res/
+
+# --- 本地依赖 / 资产（非本项目编写的代码，且含捐赠二维码）---
+**/src/main/assets/
+**/libs/
+
+# --- 捐赠相关代码（捐赠二维码页面）---
+client-app/src/main/java/com/cj/music/SponsorQr.java
+
+# --- 原生库 / 构建工具二进制（非源码，不入库）---
+**/*.so
+**/*.jar
+
+# --- 测试用二进制样本（非功能代码，不入库）---
+**/src/androidTest/assets/
+**/src/test/resources/
+**/src/androidTest/res/

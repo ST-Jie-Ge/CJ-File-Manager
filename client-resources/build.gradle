@@ -1,0 +1,15 @@
+plugins { id 'com.android.library' }
+android {
+    namespace 'com.cj.music.resources'
+    compileSdk 36
+    resourcePrefix 'client_'
+    defaultConfig { minSdk 29 }
+}
+dependencies {
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.drawerlayout:drawerlayout:1.1.1'
+    /* 播放器控制布局（client_player_control.xml / client_video_player.xml）引用了 media3-ui 的
+       exo_* 资源。这里 implementation 提供资源供 library 校验与引用；client-app 同样依赖
+       media3-ui，Gradle 会自动去重，不会重复打包。 */
+    implementation 'androidx.media3:media3-ui:1.4.1'
+}

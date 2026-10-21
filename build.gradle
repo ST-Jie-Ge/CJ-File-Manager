@@ -1,0 +1,48 @@
+/* 国内镜像优先：阿里云 public 仓库同时代理了 Maven Central 与 Google 的构件，
+   ffmpeg-kit（com.arthenica）这类大件从它拉能跑满带宽。
+
+   ⚠ 顺序必须让阿里云排在 google() 前面：这台机器直连 dl.google.com 是超时的（实测连接 2 分钟
+   后被拒），而 Gradle 会按声明顺序逐个仓库试 —— google() 放前面时，任何**缓存里还没有**的新依赖
+   都要先干等一次超时才轮到镜像，表现就是"构建卡住 4 分钟然后报 Could not resolve"。
+   google()/mavenCentral() 保留在最后兜底：镜像偶发缺件时 Gradle 会继续往下找，不会卡住构建。 */
+buildscript {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        mavenCentral()
+        google()
+    }
+    // Latest stable AGP: supports Android 16 and produces 16 KB-page-compatible APK packaging.
+    dependencies { classpath 'com.android.tools.build:gradle:9.4.0' }
+    /* Kotlin 只为 Compose 试点引入（全项目其余部分仍是纯 Java）。
+       ⚠ AGP 9 起 Kotlin 支持是内置的，**不要**再 apply 'org.jetbrains.kotlin.android'
+       （加了会直接构建失败）；但 Compose 编译器插件仍要显式挂，
+       而且用 apply plugin 的写法必须把"插件标记"这份构件也放到 classpath 上，
+       否则报 Plugin with id ... not found。 */
+    dependencies {
+        classpath 'org.jetbrains.kotlin:kotlin-gradle-plugin:2.2.20'
+        classpath 'org.jetbrains.kotlin.plugin.compose:org.jetbrains.kotlin.plugin.compose.gradle.plugin:2.2.20'
+    }
+}
+allprojects {
+    repositories {
+        maven { url 'https://maven.aliyun.com/repository/public' }
+        maven { url 'https://maven.aliyun.com/repository/google' }
+        mavenCentral()
+        /* google() 只放 Google/Android 官方构件；加 content 过滤可避免
+           非 Google 组（如 com.github.*）走到 dl.google.com 超时。 */
+        google {
+            content {
+                includeGroupByRegex "androidx\\..*"
+                includeGroupByRegex "com\\.android\\..*"
+                includeGroupByRegex "com\\.google\\..*"
+            }
+        }
+        // NextLib (FFmpeg Media3 extension) 只发布在 JitPack
+        maven {
+            url 'https://jitpack.io'
+            content { includeGroupByRegex "com\\.github\\..*" }
+        }
+    }
+}
+tasks.register('clean', Delete) { delete rootProject.layout.buildDirectory }

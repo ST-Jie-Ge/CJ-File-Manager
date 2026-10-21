@@ -1,0 +1,10 @@
+plugins { id 'java-library' }
+java { sourceCompatibility = JavaVersion.VERSION_11; targetCompatibility = JavaVersion.VERSION_11 }
+// Reuse the app's Commons IO; upstream bundles older duplicate Commons sources.
+sourceSets.main.java.exclude 'org/apache/commons/**'
+dependencies {
+    implementation fileTree(dir:'libs',include:['*.jar'])
+    implementation 'org.slf4j:slf4j-api:2.0.17'
+    implementation files(rootProject.file('client-network/libs/commons-io-2.21.0.jar'))
+}
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8' }

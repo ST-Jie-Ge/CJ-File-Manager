@@ -1,0 +1,5 @@
+rootProject.name = 'FileManager'
+include ':client-app', ':client-resources', ':client-network'
+include ':client-ed2k'
+include ':media3-decoder-av1'
+project(':media3-decoder-av1').projectDir = file('third_party/media3/libraries/decoder_av1')

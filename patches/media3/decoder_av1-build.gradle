@@ -1,0 +1,29 @@
+plugins { id 'com.android.library' }
+
+android {
+    namespace 'androidx.media3.decoder.av1'
+    compileSdk 36
+    defaultConfig {
+        minSdk 29
+        ndk { abiFilters 'arm64-v8a' }
+        externalNativeBuild {
+            cmake {
+                arguments '-DCMAKE_BUILD_TYPE=Release', '-DBUILD_TESTING=OFF'
+                targets 'gav1JNI'
+            }
+        }
+    }
+    externalNativeBuild {
+        cmake {
+            path 'src/main/jni/CMakeLists.txt'
+            version '3.22.1'
+        }
+    }
+    buildFeatures { buildConfig false }
+}
+
+dependencies {
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    implementation 'androidx.annotation:annotation:1.8.2'
+    compileOnly 'org.jetbrains.kotlin:kotlin-annotations-jvm:1.8.22'
+}

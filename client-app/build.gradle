@@ -1,0 +1,169 @@
+plugins { id 'com.android.application' }
+/* Kotlin + Compose：走 root buildscript 里声明的 classpath，用 apply plugin 而不是 plugins DSL，
+   免得再去动 pluginManagement 的仓库配置。
+   ⚠ 不要再加 'org.jetbrains.kotlin.android'：AGP 9.0 起 Kotlin 支持已内置，
+   加了这个插件会直接构建失败（"no longer required for Kotlin support since AGP 9.0"）。 */
+apply plugin: 'org.jetbrains.kotlin.plugin.compose'
+def keystorePropsFile = rootProject.file('../ftpshare4/keystore.properties')
+def keystoreProps = new Properties()
+if (keystorePropsFile.exists()) keystorePropsFile.withInputStream { keystoreProps.load(it) }
+android {
+    namespace 'com.cj.music'
+    compileSdk 36
+    ndkVersion '28.2.13676358'
+    /* musicdsp（dsp.cpp/filetime.cpp）JNI 入口指向已删除的 MusicDspProcessor / MusicFileTime，
+       Java 侧已无 loadLibrary 调用，整套 native 构建随音乐模式一并移除（libmusicdsp.so 曾白占 260KB）。 */
+    if (project.hasProperty('releaseTransferTests')) testBuildType 'release'
+    packagingOptions {
+        resources.pickFirsts += ['META-INF/LICENSE.md', 'META-INF/NOTICE.md']
+        resources.excludes += ['META-INF/versions/**/OSGI-INF/**', 'OSGI-INF/**']
+        /* ffmpeg-kit 与 libtorrent4j 都带 C++ 运行时，同名 .so 只会保留一份。
+           只打 arm64，实际只有 ffmpeg-kit 提供 libc++_shared.so，这条是给将来加 ABI 兜底的。 */
+        jniLibs.pickFirsts += ['**/libc++_shared.so']
+        /* nextlib 与 ffmpeg-kit 都带了 FFmpeg 核心 .so，保留先遇到的一份即可。
+           两者都是 FFmpeg 6.x 主版本，符号兼容；让 nextlib 的排前面优先被采用。 */
+        jniLibs.pickFirsts += ['**/libavcodec.so', '**/libavutil.so', '**/libswresample.so', '**/libswscale.so']
+        /* .so 压缩进 APK（安装时由安装器解压到应用目录）：
+           侧载分发的 APK 下载体积从 56.4MB 降到 ~31MB（.so 平均压到 47%），
+           代价是安装后磁盘多占 ~18MB（APK + 解压出的 .so 两份）。
+           系统从 Android 6 起支持这种模式，System.loadLibrary 走解压后的路径，功能零影响。 */
+        jniLibs.useLegacyPackaging = true
+        // APK 下载瘦身：压缩 DEX，安装时由系统提取；保留全部代码与资源。
+        dex.useLegacyPackaging = true
+    }
+    defaultConfig {
+        applicationId 'com.cj.music'
+        if (project.hasProperty('isolatedTransferTests')) applicationId 'com.cj.music.transfertest'
+        if (project.hasProperty('releaseTransferTests')) applicationId 'com.cj.music.transfertest.release'
+        minSdk 29
+        targetSdk 36
+        versionCode 13
+        versionName '1.15'
+        testInstrumentationRunner 'com.cj.music.net.TransferTestRunner'
+        /* eqUiTests 音乐模式 EQ UI 测试已随音乐模式删除；保留开关仅为不破坏既有命令行习惯。 */
+        if (project.hasProperty('eqUiTests')) {
+            applicationId 'com.cj.music.eqtest'
+            testInstrumentationRunner 'com.cj.music.net.TransferTestRunner'
+        }
+        /* libtorrent4j 的原生库四种 ABI 各一份，全打进包要 ~60MB（arm64 15.2MB / armv7 13.1MB /
+           x86 15.6MB / x86_64 15.6MB），且 .so 几乎压不动，包直接从 8.9MB 顶到 70MB。
+           只保留 arm64-v8a：覆盖 2014 年之后的全部真机，包体回落到 ~26MB。
+           代价：32 位 ARM 老机和 x86 模拟器装不了（非 arm64 设备即使装上，磁力任务也起不来）。
+           libs/ 下三个 x86 / armv7 的 jar 留着备回滚，靠这里过滤即可。 */
+        ndk { abiFilters(*(project.hasProperty('emuAbi') ? ['arm64-v8a','x86_64'] : ['arm64-v8a'])) }
+    }
+    if (keystorePropsFile.exists()) {
+        signingConfigs {
+            release {
+                storeFile new File(keystorePropsFile.parentFile, keystoreProps['storeFile'])
+                storePassword keystoreProps['storePassword']
+                keyAlias keystoreProps['keyAlias']
+                keyPassword keystoreProps['keyPassword']
+            }
+        }
+    }
+    buildTypes {
+        /* 调试包与日常预览版并存：安装到真机时不会覆盖用户正在使用的 preview 包及其数据。
+           后续调试统一执行 :client-app:installDebug，即会更新这个 .dev 包。 */
+        debug {
+            applicationIdSuffix '.dev'
+            versionNameSuffix '-dev'
+        }
+        release {
+            /* R8：仅做代码压缩 + 名称混淆（-dontoptimize，不做行为相关的字节码优化），
+               以缩小体积为唯一目的。资源裁剪同样只依赖静态引用分析。
+               本项目无反射 / 无 getIdentifier / 无反射式序列化，故风险面极小，
+               仍需 keep 的少数入口统一写在 proguard-rules.pro 中。 */
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            if (keystorePropsFile.exists()) signingConfig signingConfigs.release
+        }
+    }
+    sourceSets {
+        androidTest.java.srcDir '../client-network/src/test/java'
+        // JVM SMB tests use Mockito/Byte Buddy; socket tests above remain Android-compatible.
+        androidTest.java.exclude '**/*JvmTest.java'
+        androidTest.assets.srcDir '../client-network/build/test-tls'
+        if (project.hasProperty('eqUiTests')) androidTest.java.setSrcDirs(['src/eqTest/java'])
+    }
+    buildFeatures {
+        /* 只给 Compose 试点开：其余界面仍是 View，viewBinding 没开（本工程 UI 全是代码搭的）。 */
+        compose true
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    /* ⚠ AGP 9 里没有 kotlinOptions {}（Kotlin 支持已内置，不再是独立插件）。
+       jvmTarget 由 AGP 按 compileOptions 推导，不用单独写。 */
+}
+dependencies {
+    /* ---------- Compose 试点 ----------
+       只引真正用到的三件：runtime/ui/foundation（ui 传递带来）、material3（药丸分段按钮在这）、
+       activity-compose（ComposeView 与 Activity 生命周期挂钩）。
+       ui-tooling 只在 debug 包里 —— release 包不该带预览工具链。 */
+    /* BOM 与 Kotlin 版本是配对用的：KGP 2.2.x ↔ Compose 1.9（BOM 2025.08.00）。
+       拿旧 BOM 配新编译器会在编译期直接报版本不匹配。 */
+    implementation platform('androidx.compose:compose-bom:2025.08.00')
+    implementation 'androidx.compose.ui:ui'
+    implementation 'androidx.compose.material3:material3'
+    /* 不引 lifecycle-runtime-android / savedstate-android：那两个是 KMP 平台构件，
+       本项目 AGP 9 下 Kotlin 侧一律 Unresolved reference（force / 伞包都试过，无效）。
+       侧边栏 / 格式工厂等 Compose 页面都挂在 Activity 的视图树上，owner 沿树自动可得；
+       只有脱离窗口的弹窗 ComposeView 才需要手动挂 owner（见 MusicControls）。 */
+    debugImplementation 'androidx.compose.ui:ui-tooling'
+    /* jaudiotagger 的唯一使用者 AudioTagWriter（音乐模式标签编辑）已随音乐模式删除，
+       依赖、ProGuard keep 规则、assets 里的 source.jar/LICENSE/NOTICE 一并移除。 */
+    implementation project(':client-resources')
+    implementation project(':client-network')
+    implementation project(':client-ed2k')
+    implementation files('libs/libtorrent4j-2.1.0-39.jar')
+    if (!project.hasProperty('eqUiTests')) {
+        androidTestImplementation 'org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.22'
+        androidTestImplementation 'androidx.test:runner:1.1.0'
+        androidTestImplementation 'androidx.test.ext:junit:1.1.1'
+    }
+    testImplementation 'junit:junit:4.12'
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.google.android.material:material:1.11.0'
+    implementation 'androidx.drawerlayout:drawerlayout:1.1.1'
+    /* 内置压缩/解压：commons-compress 覆盖 zip/7z/tar/gz/xz，7z 需要 xz，rar 用 junrar。
+       commons-io 已由 client-network 的本地 jar 提供，这里排除 Maven 版，否则重复类。 */
+    implementation('org.apache.commons:commons-compress:1.26.2'){ exclude group:'commons-io', module:'commons-io' }
+    implementation 'org.tukaani:xz:1.9'
+    /* junrar 8.1.2 起支持 RAR5/RAR7 解压（含加密、多卷），并修复 RAR5 symlink 穿越等安全问题。
+       8.x 运行时零第三方重依赖（扫 jar 确认无 commons-io/BouncyCastle 引用），
+       仅传递 org.slf4j:slf4j-api:2.0.17。commons-io 仍由 client-network 本地 jar 提供。 */
+    implementation 'com.github.junrar:junrar:8.1.2'
+    /* ZIP 加密（AES/ZipCrypto）与中文/特殊字符文件名编码：commons-compress 不支持加密 ZIP，
+       zip4j 覆盖创建与解压，且可设置 Charset。 */
+    implementation 'net.lingala.zip4j:zip4j:2.11.5'
+    /* commons-compress 的 Builder 继承 commons-io 的 AbstractStreamBuilder，编译期需要它的符号；
+       但打包时必须只留 client-network 的本地 jar，否则重复类，所以这里只 compileOnly。 */
+    compileOnly 'commons-io:commons-io:2.21.0'
+    /* 内置播放器：本地文件直接播放；FTP/FTPS 媒体由 FtpDataSource 在线流式读取，
+       不配置任何 Cache 数据源，播放过程不会在本地落缓存。 */
+    implementation 'androidx.media3:media3-exoplayer:1.4.1'
+    // 本地编译的官方 AV1/libgav1 解码扩展（源码固定在 Media3 1.4.1）。
+    implementation project(':media3-decoder-av1')
+    implementation 'androidx.media3:media3-ui:1.4.1'
+    /* FFmpeg 软件解码扩展（NextLib）：用于硬解不支持的高 profile / 高分辨率 H.264/H.265  fallback。
+       0.8.2 依赖 media3-exoplayer 1.4.0，项目主版本 1.4.1 会覆盖到更高版本，保持兼容。 */
+    implementation('com.github.anilbeesetti.nextlib:nextlib-media3ext:0.8.2') {
+        exclude group: 'androidx.media3', module: 'media3-exoplayer'
+    }
+    /* 格式工厂（视频转码）：自编的 ffmpeg-kit 瘦身版 aar（arm64-v8a）。
+       由 ffmpeg-kit v6.0.LTS 官方源码自编，只启用实际用到的 6 个外部库
+       （x264 / x265 / libvpx / lame / opus / libvorbis），FFmpeg 原生解码器全部保留
+       —— 格式工厂接受任意用户文件，裁解码器会静默缩窄支持的输入格式。
+       相比官方 full-gpl 的 arm64 切片（27.7MB）小约 6MB。
+       构建与重打包脚本见 ffmpeg-kit-build/，不入选版本控制的大文件仅此一个 aar。 */
+    implementation files('libs/ffmpeg-kit-slim-arm64.aar')
+    /* 用本地 aar 就丢掉了 Maven 的传递依赖，这个必须显式补上：
+       FFmpegKit 用它做异常栈包装，漏了会在运行期 NoClassDefFoundError。 */
+    implementation 'com.arthenica:smart-exception-java:0.2.1'
+}
+
+// Certificates belong only to the instrumentation APK, never the application APK.
+tasks.configureEach { if (name == 'mergeDebugAndroidTestAssets') dependsOn ':client-network:generateTestCertificate', ':client-network:generateDnsTestCertificate' }
